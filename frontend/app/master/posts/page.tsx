@@ -1,62 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { pbClient } from "@/lib/pb";
+import { api } from "@/lib/api";
+import type { PostRecord } from "@/lib/types";
 
-type Row = { id: string; title: string; slug: string; status: string };
-
-export default function PostsPage() {
+export default function Posts() {
   const router = useRouter();
-  const [rows, setRows] = useState<Row[]>([]);
-
-  async function load() {
-    const res = await pbClient().collection("posts").getList<Row>(1, 50, { sort: "-updated" });
-    setRows(res.items);
-  }
-  useEffect(() => { load().catch(() => undefined); }, []);
-
-  async function create() {
-    const rec = await pbClient().collection("posts").create({
-      title: "مقاله تازه",
-      slug: `post-${Date.now().toString(36)}`,
-      excerpt: "",
-      content: "<p></p>",
-      cover: "",
-      status: "draft",
-      category: "",
-      tags: "",
-      author_name: pbClient().authStore.record?.name || "",
-    });
-    router.push(`/master/posts/${rec.id}`);
-  }
-
-  async function remove(id: string) {
-    if (!confirm("مقاله حذف شود؟")) return;
-    await pbClient().collection("posts").delete(id);
-    await load();
-  }
-
+  const [items, setItems] = useState<PostRecord[]>([]);
+  useEffect(() => { api.posts.list().then((r) => setItems(r.items)).catch(() => {}); }, []);
   return (
     <div>
-      <div className="topbar"><h1>مقاله‌ها</h1><button className="btn btn-solid" type="button" onClick={create}>مقاله تازه</button></div>
-      <table>
-        <thead><tr><th>عنوان</th><th>نامک</th><th>وضعیت</th><th></th></tr></thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.id}>
-              <td>{row.title}</td>
-              <td dir="ltr">{row.slug}</td>
-              <td>{row.status === "published" ? "منتشرشده" : "پیش‌نویس"}</td>
-              <td className="row-actions">
-                <Link href={`/master/posts/${row.id}`}>ویرایش</Link>
-                <button type="button" onClick={() => remove(row.id)}>حذف</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">مقاله‌ها</h1>
+        <button type="button" className="min-h-11 rounded-lg bg-teal px-4 text-sm text-paper" onClick={async () => {
+          const p = await api.posts.create("مقاله تازه");
+          router.push("/master/posts/" + p.id);
+        }}>مقاله تازه</button>
+      </div>
+      <ul className="mt-4 divide-y divide-line rounded-xl border border-line bg-card">
+        {items.map((p) => (
+          <li key={p.id} className="flex items-center justify-between px-4 py-3">
+            <a href={"/master/posts/" + p.id} className="font-medium">{p.title}</a>
+            <span className="text-sm text-muted">{p.status === "published" ? "منتشر" : "پیش‌نویس"}</span>
+          </li>
+        ))}
+        {items.length === 0 ? <li className="px-4 py-8 text-center text-sm text-muted">مقاله‌ای نیست.</li> : null}
+      </ul>
     </div>
   );
 }

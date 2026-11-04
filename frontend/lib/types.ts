@@ -1,146 +1,130 @@
 export type MenuItem = { label: string; href: string };
 
-export type Settings = {
-  site_name: string;
-  tagline?: string;
-  description?: string;
-  logo?: string;
-  favicon?: string;
-  footer?: string;
-  menu?: MenuItem[];
-  posts_per_page?: number;
-  seo_title?: string;
-  seo_description?: string;
+export type SiteSettings = {
+  siteTitle: string;
+  tagline: string;
+  footerText: string;
+  homepageSlug: string;
+  logoUrl: string;
+  headerMenu: MenuItem[];
+  footerMenu: MenuItem[];
+  postsPerPage: number;
+  locale: string;
+  dir: "rtl" | "ltr";
+  domain: string;
 };
 
-export type Snippet = {
-  id: string;
-  name: string;
-  description?: string;
-  code: string;
-  kind: "html" | "css" | "js" | "jsonld" | string;
-  location: "head" | "body_open" | "body_close" | "footer" | string;
-  scope: "all" | "pages" | string;
-  slugs?: string;
-  priority?: number;
-};
+export type User = { id: string; email: string; name: string; role: "admin" | "editor" };
 
-export type PluginField = {
-  key: string;
-  label: string;
-  type: string;
-  options?: { value: string; label: string }[];
-  itemFields?: PluginField[];
-};
-
-export type PluginBlock = {
-  type: string;
-  label: string;
-  group?: string;
-  icon?: string;
-  defaults?: Record<string, unknown>;
-  fields?: PluginField[];
-  template?: string;
-};
-
-export type PluginInfo = {
-  id: string;
-  name: string;
-  version: string;
-  description?: string;
-  author?: string;
-  enabled: boolean;
-  admin?: { menu?: string; route?: string } | null;
-  assets?: string[];
-  blocks?: PluginBlock[] | null;
-  settingsForm?: {
-    title?: string;
-    intro?: string;
-    fields?: PluginField[];
-  } | null;
-};
-
-export type Runtime = {
-  settings: Settings;
-  snippets: Snippet[];
-  plugins: PluginInfo[];
-};
-
-export type Block = {
+export type BlockNode = {
   id: string;
   type: string;
-  props: Record<string, any>;
+  props: Record<string, unknown>;
+  children?: BlockNode[];
 };
 
-export type Column = { id: string; blocks: Block[] };
-
-export type Row = {
+export type PageRecord = {
   id: string;
-  props: { bg?: string; pad?: string; full?: boolean };
-  columns: Column[];
+  title: string;
+  slug: string;
+  status: "draft" | "published";
+  tree: BlockNode[];
+  seoTitle: string;
+  seoDescription: string;
+  publishedAt: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
-export type PageDoc = { version: 1; rows: Row[] };
-
-export type PostCard = {
+export type PostRecord = {
   id: string;
   title: string;
   slug: string;
   excerpt: string;
-  cover: string;
-  category: string;
-  author_name: string;
-  published_at: string;
   content?: string;
-  tags?: string;
-  status?: string;
+  status: "draft" | "published";
+  coverUrl: string;
+  coverId: string;
+  tags: string[];
+  seoTitle: string;
+  seoDescription: string;
+  publishedAt: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
-export const RESERVED_SLUGS = new Set([
-  "blog",
-  "master",
-  "developers",
-  "pb",
-  "api",
-  "login",
-  "_next",
-]);
+export type MediaItem = {
+  id: string;
+  url: string;
+  alt: string;
+  title: string;
+  mime: string;
+  size: number;
+  filename: string;
+  createdAt: string;
+};
 
-export function emptyDoc(): PageDoc {
-  return { version: 1, rows: [] };
-}
+export type PropOption = { value: string; label: string };
 
-export function asDoc(v: unknown): PageDoc {
-  let value = v;
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return emptyDoc();
-    }
-  }
-  if (value && typeof value === "object" && Array.isArray((value as PageDoc).rows)) {
-    return value as PageDoc;
-  }
-  return emptyDoc();
-}
+export type PropDef = {
+  key: string;
+  label: string;
+  type: "text" | "textarea" | "number" | "select" | "switch" | "color" | "align" | "url" | "image" | "repeater";
+  default?: unknown;
+  options?: PropOption[];
+  itemFields?: PropDef[];
+};
 
-export function uid(prefix = "b"): string {
-  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
-}
+export type ElementDef = {
+  type: string;
+  label: string;
+  category: string;
+  plugin?: string;
+  props: PropDef[];
+  hidden?: boolean;
+};
 
-export function slugify(input: string): string {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[^\p{L}\p{N}-]+/gu, "")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 160);
-}
+export type PluginInfo = {
+  name: string;
+  slug: string;
+  version: string;
+  description: string;
+  author: string;
+  enabled: boolean;
+  needsRebuild?: boolean;
+  hasElements?: boolean;
+  admin?: { menu: string; path: string };
+  capabilities?: string[];
+};
 
-export function publicPath(slug: string): string {
-  if (!slug || slug === "home") return "/";
-  return `/${slug}`;
-}
+export type Snippet = {
+  id: string;
+  title: string;
+  slug: string;
+  description: string;
+  code: string;
+  kind: "html" | "css" | "js" | "shortcode";
+  location: "header" | "footer" | "body_open" | "shortcode";
+  active: boolean;
+  priority: number;
+  pages: string[];
+  updatedAt: string;
+};
+
+export type SnippetBundle = {
+  header: { id: string; kind: string; code: string; slug: string }[];
+  footer: { id: string; kind: string; code: string; slug: string }[];
+  bodyOpen: { id: string; kind: string; code: string; slug: string }[];
+  css: string;
+  jsHeader: string;
+  jsFooter: string;
+  shortcodes: Record<string, string>;
+};
+
+export type FormSubmission = {
+  id: string;
+  form: string;
+  pageSlug: string;
+  data: Record<string, string>;
+  createdAt: string;
+};

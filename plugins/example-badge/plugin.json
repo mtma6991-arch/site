@@ -1,9 +1,0 @@
-{
-  "id": "example-badge",
-  "name": "نشان نمونه",
-  "version": "1.0.0",
-  "description": "نمونهٔ پلاگین صفحه‌ساز: یک قطعهٔ تازه، یک فایل CSS و یک فرم تنظیمات.",
-  "author": "نگار",
-  "minCms": "1.0.0",
-  "assets": ["assets/badge.css"]
-}

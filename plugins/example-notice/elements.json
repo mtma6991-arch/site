@@ -1,0 +1,32 @@
+[
+  {
+    "type": "notice_bar",
+    "label": "نوار اعلان",
+    "category": "پلاگین",
+    "props": [
+      {
+        "key": "title",
+        "label": "عنوان",
+        "type": "text",
+        "default": "توجه"
+      },
+      {
+        "key": "text",
+        "label": "متن",
+        "type": "textarea",
+        "default": "این المان از افزونهٔ نمونه می‌آید و بدون بازسازی هسته رندر می‌شود."
+      },
+      {
+        "key": "tone",
+        "label": "لحن",
+        "type": "select",
+        "default": "info",
+        "options": [
+          { "value": "info", "label": "اطلاع" },
+          { "value": "warn", "label": "هشدار" },
+          { "value": "success", "label": "موفق" }
+        ]
+      }
+    ]
+  }
+]

@@ -1,43 +1,34 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { pbClient } from "@/lib/pb";
+import { api } from "@/lib/api";
 
 export default function Dashboard() {
-  const [counts, setCounts] = useState({ pages: 0, posts: 0, media: 0, inbox: 0 });
-
-  useEffect(() => {
-    const pb = pbClient();
-    Promise.all([
-      pb.collection("pages").getList(1, 1),
-      pb.collection("posts").getList(1, 1),
-      pb.collection("media").getList(1, 1),
-      pb.collection("submissions").getList(1, 1, { filter: "read = false" }),
-    ]).then(([pages, posts, media, inbox]) => {
-      setCounts({ pages: pages.totalItems, posts: posts.totalItems, media: media.totalItems, inbox: inbox.totalItems });
-    }).catch(() => undefined);
-  }, []);
-
-  const cards = [
-    ["/master/pages", "صفحه‌ها", counts.pages],
-    ["/master/posts", "مقاله‌ها", counts.posts],
-    ["/master/media", "رسانه", counts.media],
-    ["/master/inbox", "پیام نخوانده", counts.inbox],
-  ] as const;
-
+  const [s, setS] = useState<{ pages: number; publishedPages: number; posts: number; publishedPosts: number; media: number; submissions: number } | null>(null);
+  useEffect(() => { api.stats().then(setS).catch(() => {}); }, []);
+  const cards = s ? [
+    ["صفحات", s.pages, s.publishedPages + " منتشر"],
+    ["مقاله‌ها", s.posts, s.publishedPosts + " منتشر"],
+    ["رسانه", s.media, "فایل"],
+    ["فرم‌ها", s.submissions, "پیام"],
+  ] : [];
   return (
     <div>
-      <div className="topbar"><h1>پیشخوان</h1></div>
-      <div className="cards">
-        {cards.map(([href, label, n]) => (
-          <Link key={href} href={href} className="panel metric"><span>{label}</span><strong>{n.toLocaleString("fa-IR")}</strong></Link>
+      <h1 className="text-2xl font-semibold">میز کار</h1>
+      <p className="mt-1 text-sm text-muted">صفحه بسازید، مقاله بنویسید، یا از افزونه کد سفارشی یک اسنیپت اضافه کنید.</p>
+      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {cards.map(([l, n, h]) => (
+          <div key={String(l)} className="rounded-xl border border-line bg-card p-4">
+            <p className="text-sm text-muted">{l}</p>
+            <p className="mt-1 text-3xl font-semibold">{n}</p>
+            <p className="text-xs text-muted">{h}</p>
+          </div>
         ))}
       </div>
-      <div className="panel" style={{ marginTop: 16 }}>
-        <h2>شروع سریع</h2>
-        <p>صفحهٔ خانه را از «صفحه‌ها» باز کنید. نامک <code>home</code> روی آدرس اصلی سایت است.</p>
-        <p>آنالیتیکس و کد دلخواه را در «کد سفارشی» بگذارید. راهنمای ساخت پلاگین روی <Link href="/developers">/developers</Link> است.</p>
+      <div className="mt-6 flex flex-wrap gap-3">
+        <a href="/master/pages" className="inline-flex min-h-11 items-center rounded-lg bg-teal px-4 text-sm text-paper">صفحات</a>
+        <a href="/master/posts" className="inline-flex min-h-11 items-center rounded-lg border border-line px-4 text-sm">مقاله‌ها</a>
+        <a href="/master/plugins/wpcode" className="inline-flex min-h-11 items-center rounded-lg border border-line px-4 text-sm">کد سفارشی</a>
       </div>
     </div>
   );
