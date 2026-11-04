@@ -1,0 +1,13 @@
+{
+  "id": "wpcode",
+  "name": "کد سفارشی",
+  "version": "1.0.0",
+  "description": "تزریق HTML، CSS، JavaScript و JSON-LD در سر صفحه، بدنه و پاورقی. معادل سبک WPCode برای نگار.",
+  "author": "نگار",
+  "minCms": "1.0.0",
+  "admin": {
+    "menu": "کد سفارشی",
+    "route": "/master/plugins/wpcode"
+  },
+  "assets": []
+}
