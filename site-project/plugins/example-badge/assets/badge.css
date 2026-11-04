@@ -1,0 +1,12 @@
+.ex-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+}
+.ex-badge.tone-copper { background: #f3e1d8; color: #8c3e22; }
+.ex-badge.tone-pine { background: #e5f0ed; color: #1f4d45; }
+.ex-badge.tone-ink { background: #1c1915; color: #f6f1e7; }

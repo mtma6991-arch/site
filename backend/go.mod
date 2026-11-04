@@ -1,6 +1,6 @@
 module site
 
-go 1.27
+go 1.26
 
 require (
 	ganigeorgiev.com/pocketbase/dbx v1.13.0

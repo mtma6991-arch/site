@@ -58,7 +58,7 @@ cd /opt/site && sudo git pull && sudo bash install.sh --upgrade
 
 ## توسعه روی سیستم خودتان
 
-Go 1.27 و Node 22 لازم است.
+Go 1.26 و Node 22 لازم است.
 
 ```bash
 bash dev.sh

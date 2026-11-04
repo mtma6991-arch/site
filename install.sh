@@ -80,14 +80,14 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y ca-certificates curl unzip git debian-keyring debian-archive-keyring apt-transport-https gnupg
 
-if ! command -v go >/dev/null 2>&1 || ! go version | grep -Eq 'go1\.(2[7-9]|[3-9][0-9])'; then
+if ! command -v go >/dev/null 2>&1 || ! go version | grep -Eq 'go1\.(2[6-9]|[3-9][0-9])'; then
   arch="$(uname -m)"
   case "$arch" in
     x86_64) goarch=amd64 ;;
     aarch64|arm64) goarch=arm64 ;;
     *) echo "معماری پشتیبانی نمی‌شود: $arch"; exit 1 ;;
   esac
-  curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.27.3.linux-${goarch}.tar.gz"
+  curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.26.2.linux-${goarch}.tar.gz"
   rm -rf /usr/local/go
   tar -C /usr/local -xzf /tmp/go.tgz
   ln -sfn /usr/local/go/bin/go /usr/local/bin/go
