@@ -1,10 +1,10 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Shell } from "@/components/admin/Shell";
+import { AdminShell } from "@/components/shell";
 
 export default function MasterLayout({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  if (path === "/master/login") return <>{children}</>;
-  return <Shell>{children}</Shell>;
+  if (path === "/master/login") return children;
+  return <AdminShell>{children}</AdminShell>;
 }

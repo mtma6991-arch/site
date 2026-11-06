@@ -1,16 +1,30 @@
 # نگار
 
-سامانهٔ مدیریت محتوا: بک‌اند Go، پایگاه PocketBase، فرانت Next.js.
+سایت‌ساز خودمیزبان برای مخزن [mtma6991-arch/site](https://github.com/mtma6991-arch/site).
 
-صفحه‌ساز کشیدنی، مقاله، مرکز رسانه، فرم، کاربر، و افزونه. افزونهٔ **کد سفارشی** مثل WPCode وردپرس همراه بسته است. راهنمای ساخت افزونه: [docs/plugin-development.md](docs/plugin-development.md) و داخل پنل در مسیر `/master/guide`.
+- بک‌اند: Go، با [PocketBase](https://pocketbase.io) به‌عنوان پایگاه و فایل
+- فرانت: Next.js
+- مدیریت: مسیر `/master`
+- صفحه‌ساز درگ‌انددراپ، مجله، مرکز رسانه، پلاگین
+- پلاگین **کد سفارشی** (ایدهٔ WPCode) از اول داخل مخزن است
 
-مخزن: `https://github.com/mtma6991-arch/site`
+## فرستادن به گیت‌هاب
+
+محتوای همین پوشه را در ریشهٔ مخزن بگذارید، نه یک پوشهٔ اضافه.
+
+```bash
+cd site
+git init
+git add .
+git commit -m "نگار"
+git branch -M main
+git remote add origin git@github.com:mtma6991-arch/site.git
+git push -u origin main
+```
 
 ## نصب روی سرور
 
-یک سرور تازهٔ اوبونتو ۲۲.۰۴ یا ۲۴.۰۴ (حداقل ۲ گیگابایت رم) و یک دامنه که به IP سرور اشاره کند.
-
-اسکریپت خودش Go، Node.js 22 و Caddy را دانلود و نصب می‌کند. دامنه، نام سایت، ایمیل و رمز مدیر را همان موقع می‌پرسد.
+سرور اوبونتو یا دبیان، با دسترسی ریشه و دامنهٔ اشاره‌شده به IP سرور.
 
 ```bash
 git clone https://github.com/mtma6991-arch/site.git
@@ -18,55 +32,68 @@ cd site
 sudo bash install.sh
 ```
 
-اگر کد را به‌صورت زیپ روی سرور ریخته‌اید، داخل همان پوشه `sudo bash install.sh` کافی است.
+اسکریپت دامنه، نام سایت، ایمیل و رمز مدیر را می‌پرسد. Go 1.27.3، Node.js 22.23.4 و Caddy 2.11.9 را از بایگانی رسمی (با آینهٔ پشتیبان و جمع‌آزما) نصب می‌کند و گواهی HTTPS را Caddy می‌گیرد.
 
-نصب بی‌پرسش:
+دیگر از اسکریپت NodeSource و مخزن apt کلودسمیت استفاده نمی‌شود؛ همان‌ها در ترمینال چند خط ۴۰۴ می‌نویسند. وابستگی‌های Go هم داخل `backend/vendor` است، پس `go mod tidy` اجرا نمی‌شود و پروکسی ماژول چیزی دانلود نمی‌کند.
 
-```bash
-sudo DOMAIN=example.com SITE_TITLE='نگار' ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='یک-رمز-بلند' WITH_WWW=1 bash install.sh --yes
-```
-
-بعد از نصب:
-
-- سایت: `https://دامنه`
-- پنل: `https://دامنه/master`
-
-داده در `/var/lib/site` می‌ماند و با به‌روزرسانی کد پاک نمی‌شود.
+اگر خود `apt-get update` هنوز ۴۰۴ نشان داد، یک فایل خراب در `/etc/apt/sources.list.d` (اغلب `caddy-stable.list` یا `nodesource.list` از نصب قبلی) دارید. اسکریپت لیست Caddy کلودسمیت را پاک می‌کند. اگر npm به رجیستری نرسید:
 
 ```bash
-sudo site status
-sudo site logs
-sudo site rebuild
-sudo site update    # فقط اگر با git clone نصب شده باشد
+sudo NPM_REGISTRY=https://registry.npmmirror.com bash install.sh
 ```
 
-اگر IP وارد کنید، سایت روی HTTP و بدون گواهی بالا می‌آید.
-
-## توسعه روی رایانهٔ خودتان
-
-Go 1.27 یا جدیدتر و Node 22.
+بدون پرسش (مثلاً در اسکریپت خودتان):
 
 ```bash
-bash scripts/dev.sh
+sudo DOMAIN=example.com SITE_NAME=نگار ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='یک-رمز-بلند' bash install.sh
 ```
 
-ترمینال دوم:
+بعد از اتمام:
+
+| | |
+| --- | --- |
+| سایت | `https://دامنه` |
+| مدیریت | `https://دامنه/master` |
+| پایگاه PocketBase | `https://دامنه/pb/_/` |
+
+ایمیل و رمز هر دو ورود یکی است. رمز را اسکریپت در `/opt/site/backend/env` نگه می‌دارد؛ دسترسی فایل فقط برای ریشه است.
+
+به‌روزرسانی از همان مخزن:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+cd /opt/site && sudo git pull && sudo bash install.sh --upgrade
 ```
 
-ورود آزمایشی در خروجی `dev.sh` چاپ می‌شود. پنل: `http://127.0.0.1:3000/master`
+## توسعه روی سیستم خودتان
 
-## داخل پنل
+Go 1.27 و Node 22 لازم است.
 
-- صفحات: ساخت، چیدن با کشیدن المان، انتشار
-- مقاله‌ها: ویرایشگر با تیتر، فهرست، پیوند، تصویر از رسانه، حالت HTML
-- رسانه: بارگذاری و گذاشتن در صفحه
-- افزونه‌ها: روشن و خاموش، نصب زیپ
-- کد سفارشی: اسنیپت HTML و CSS و JavaScript و شورت‌کد `[[snippet:شناسه]]`
-- تنظیمات، کاربران، صندوق فرم‌ها
+```bash
+bash dev.sh
+```
 
-داشبورد PocketBase از اینترنت در دسترس نیست. روی خود سرور: `http://127.0.0.1:8090/_/` با همان ایمیل مدیر.
+سایت روی `http://127.0.0.1:3000` و مدیریت روی `/master`. ورود اولیه: `admin@example.com` / `admin12345`. این رمز فقط برای حالت توسعه است.
+
+## چه چیزی داخل پنل است
+
+- صفحه‌ها: ساخت، چیدن با کشیدن قطعه، پیش‌نویس و انتشار. نامک `home` صفحهٔ اصلی است.
+- مقاله‌ها: ویرایشگر با تیتر، فهرست، نقل‌قول، کد، پیوند و تصویر از رسانه.
+- رسانه: بارگذاری، توضیح، کپی نشانی.
+- صندوق: پیام فرم تماس.
+- پلاگین‌ها: روشن و خاموش، نصب زیپ، حذف.
+- کد سفارشی: HTML و CSS و JavaScript و JSON-LD در سر، بدنه و پاورقی.
+- کاربران: مدیر، ویرایشگر، نویسنده.
+- تنظیمات: نام، منو، سئو، لوگو.
+
+راهنمای ساخت پلاگین: [docs/plugin-development.md](docs/plugin-development.md) و بعد از نصب روی `/developers`.
+
+## ساختار
+
+```
+backend/     برنامهٔ Go
+frontend/    Next.js
+plugins/     wpcode و example-badge
+docs/        راهنمای توسعه‌دهنده
+install.sh   نصب سرور
+dev.sh       اجرای محلی
+```

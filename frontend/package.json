@@ -1,36 +1,22 @@
 {
   "name": "negar",
   "private": true,
-  "version": "1.0.0",
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
-    "start": "node .next/standalone/server.js",
-    "typecheck": "tsc --noEmit"
+    "start": "next start -H 127.0.0.1 -p 3000"
   },
   "dependencies": {
-    "@tiptap/extension-character-count": "^3.10.1",
-    "@tiptap/extension-highlight": "^3.10.1",
-    "@tiptap/extension-image": "^3.10.1",
-    "@tiptap/extension-link": "^3.10.1",
-    "@tiptap/extension-placeholder": "^3.10.1",
-    "@tiptap/extension-text-align": "^3.10.1",
-    "@tiptap/extension-underline": "^3.10.1",
-    "@tiptap/pm": "^3.10.1",
-    "@tiptap/react": "^3.10.1",
-    "@tiptap/starter-kit": "^3.10.1",
-    "lucide-react": "^0.510.0",
+    "@fontsource/vazirmatn": "^5.2.8",
     "next": "^15.5.4",
+    "pocketbase": "0.28.2",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "typescript": "^5.7.3"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.13",
-    "@types/node": "^22.18.8",
+    "@types/node": "^22.15.0",
     "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.13",
-    "typescript": "^5.9.2"
+    "@types/react-dom": "^19.2.0"
   }
 }

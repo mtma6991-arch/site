@@ -1,454 +1,387 @@
 #!/usr/bin/env bash
-# نصب کامل نگار روی اوبونتو یا دبیان.
-# Go، Node، Caddy و سرویس‌ها را خودش می‌گیرد. دامنه را همین‌جا می‌پرسد.
+# نصب نگار روی اوبونتو/دبیان.
+#   sudo bash install.sh
+#   DOMAIN=example.com ADMIN_EMAIL=a@b.c ADMIN_PASSWORD='********' sudo -E bash install.sh
+# به‌روزرسانی بدون پرسش دوباره:
+#   sudo bash install.sh --upgrade
+#
+# Go و Node و Caddy از بایگانی رسمی گرفته می‌شوند، نه از NodeSource و نه از
+# مخزن apt کلودسمیت. آن دو منبع در ترمینال سیل ۴۰۴ می‌سازند. اگر یک آینه
+# ۴۰۴ بدهد، اسکریپت خطا را نشان نمی‌دهد و آینهٔ بعدی را امتحان می‌کند.
+# ماژول‌های Go داخل backend/vendor هستند؛ go mod tidy اجرا نمی‌شود.
 set -euo pipefail
 
-if [[ "${EUID:-0}" -ne 0 ]]; then
-  echo "با دسترسی ریشه اجرا کنید: sudo bash install.sh"
+if [ "$(id -u)" -ne 0 ]; then
+  echo "این اسکریپت را با sudo اجرا کنید."
   exit 1
 fi
 
-YES=0
-if [[ "${1:-}" == "--yes" ]]; then
-  YES=1
+GO_VERSION="1.27.3"
+NODE_VERSION="22.23.4"
+CADDY_VERSION="2.11.9"
+
+declare -A GO_SHA=(
+  [amd64]="65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40"
+  [arm64]="a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49"
+)
+declare -A NODE_SHA=(
+  [x64]="1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce"
+  [arm64]="6287aa46b6c375d816e63ae66d024fbbfd70404825aabdfdf898a970871d2f4b"
+)
+declare -A CADDY_SHA512=(
+  [amd64]="3379dbb17ecce723b6cb07a3341a9b921bd38548b370df65f6cdae0eb8b6424d1fd1db37cb4ee02649d253d06cba0580e9d649d3f54e895ae10066e88ae127f9"
+  [arm64]="ee0cb331e8d7e4306b56e2ff874cfdc467245115727be18fea0b0212af74c520cd6fea1fa895e7ebf55472ee9604b3e866816913f10f66ee92212de874650a03"
+)
+
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEST="${INSTALL_DIR:-/opt/site}"
+UPGRADE=0
+if [ "${1:-}" = "--upgrade" ]; then
+  UPGRADE=1
 fi
 
-export DEBIAN_FRONTEND=noninteractive
-SRC="$(cd "$(dirname "$0")" && pwd)"
+prompt() {
+  local var="$1" text="$2" secret="${3:-}" def="${4:-}"
+  if [ -n "${!var:-}" ]; then
+    return
+  fi
+  local value=""
+  if [ "$secret" = "1" ]; then
+    read -r -s -p "$text" value
+    echo
+  elif [ -n "$def" ]; then
+    read -r -p "$text [$def]: " value
+    value="${value:-$def}"
+  else
+    read -r -p "$text" value
+  fi
+  printf -v "$var" '%s' "$value"
+}
 
-log() { printf '\n== %s\n' "$*"; }
-die() { printf 'خطا: %s\n' "$*" >&2; exit 1; }
+# فایل env را بدون eval می‌خواند تا $ داخل رمز، موقع ارتقا خراب نشود.
+load_env_file() {
+  local file="$1" line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    key="${line%%=*}"
+    val="${line#*=}"
+    case "$key" in
+      NEGAR_DOMAIN|NEGAR_ADMIN_EMAIL|NEGAR_ADMIN_PASSWORD|NEGAR_SITE_NAME|NEGAR_PUBLIC_URL) ;;
+      *) continue ;;
+    esac
+    if [ "${#val}" -ge 2 ] && [ "${val:0:1}" = '"' ] && [ "${val: -1}" = '"' ]; then
+      val="${val:1:$((${#val} - 2))}"
+      val="${val//\\\"/\"}"
+      val="${val//\\\\/\\}"
+    fi
+    printf -v "$key" '%s' "$val"
+  done < "$file"
+}
 
-if [[ -f /etc/os-release ]]; then
-  # shellcheck disable=SC1091
-  . /etc/os-release
+# مقدار را برای EnvironmentFile سیستم‌دی امن می‌کند.
+env_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/}"
+  printf '%s' "$s"
+}
+
+# دانلود خاموش. ۴۰۴ و صفحهٔ HTML به‌جای فایل، فقط یعنی «این منبع نه» و می‌رود سراغ بعدی.
+fetch_checked() {
+  local dest="$1" algo="$2" want="$3"
+  shift 3
+  local url
+  rm -f "$dest"
+  for url in "$@"; do
+    echo "  · ${url}"
+    if curl -fL --silent --retry 2 --retry-delay 1 --connect-timeout 20 --max-time 300 \
+      -A "negar-install/1" -o "$dest" "$url"; then
+      if [ -s "$dest" ] && echo "${want}  ${dest}" | "${algo}sum" -c --status -; then
+        echo "  دریافت و جمع‌آزما درست بود."
+        return 0
+      fi
+      echo "  این آدرس فایل درست نداد (اغلب صفحهٔ ۴۰۴ با کد ۲۰۰). منبع بعدی."
+    else
+      echo "  این منبع در دسترس نیست."
+    fi
+    rm -f "$dest"
+  done
+  return 1
+}
+
+if [ "$UPGRADE" = "1" ] && [ -f "$DEST/backend/env" ]; then
+  load_env_file "$DEST/backend/env"
+  DOMAIN="${DOMAIN:-${NEGAR_DOMAIN:-}}"
+  ADMIN_EMAIL="${ADMIN_EMAIL:-${NEGAR_ADMIN_EMAIL:-}}"
+  ADMIN_PASSWORD="${ADMIN_PASSWORD:-${NEGAR_ADMIN_PASSWORD:-}}"
+  SITE_NAME="${SITE_NAME:-${NEGAR_SITE_NAME:-نگار}}"
+  WITH_WWW="${WITH_WWW:-1}"
 else
-  die "سیستم شناسایی نشد. این اسکریپت برای اوبونتو و دبیان است."
+  prompt DOMAIN "دامنه سایت (بدون https، مثلا example.com): "
+  prompt SITE_NAME "نام سایت: " "" "نگار"
+  prompt ADMIN_EMAIL "ایمیل مدیر: "
+  prompt ADMIN_PASSWORD "رمز مدیر (حداقل ۸ نویسه): " 1
+  prompt ADMIN_PASSWORD2 "تکرار رمز: " 1
+  if [ "${ADMIN_PASSWORD}" != "${ADMIN_PASSWORD2:-$ADMIN_PASSWORD}" ]; then
+    echo "رمزها یکی نیستند."
+    exit 1
+  fi
+  prompt WITH_WWW "زیردامنه www هم اضافه شود؟ (1/0): " "" "1"
 fi
-case "${ID:-}" in
-  ubuntu|debian) ;;
-  *) die "فقط اوبونتو و دبیان پشتیبانی می‌شوند. شناسه سیستم: ${ID:-ناشناس}" ;;
+
+DOMAIN="${DOMAIN#https://}"
+DOMAIN="${DOMAIN#http://}"
+DOMAIN="${DOMAIN%%/*}"
+DOMAIN="$(echo "$DOMAIN" | tr '[:upper:]' '[:lower:]')"
+if ! echo "$DOMAIN" | grep -Eq '^[a-z0-9.-]+\.[a-z]{2,}$'; then
+  echo "دامنه نامعتبر است: $DOMAIN"
+  exit 1
+fi
+if [ "${#ADMIN_PASSWORD}" -lt 8 ]; then
+  echo "رمز باید حداقل ۸ نویسه باشد."
+  exit 1
+fi
+if ! echo "$ADMIN_EMAIL" | grep -Eq '^[^@]+@[^@]+\.[^@]+$'; then
+  echo "ایمیل نامعتبر است."
+  exit 1
+fi
+
+case "$(uname -m)" in
+  x86_64) GOARCH=amd64; NODEARCH=x64; CADDYARCH=amd64 ;;
+  aarch64|arm64) GOARCH=arm64; NODEARCH=arm64; CADDYARCH=arm64 ;;
+  *) echo "معماری پشتیبانی نمی‌شود: $(uname -m)"; exit 1 ;;
 esac
 
-if [[ -f /etc/site/site.env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source /etc/site/site.env
-  set +a
+# لیست apt نسخهٔ قبلی (Cloudsmith) روی خیلی از سرورها ۴۰۴های پشت‌سرهم می‌دهد.
+rm -f /etc/apt/sources.list.d/caddy-stable.list \
+  /etc/apt/sources.list.d/caddy-testing.list \
+  /etc/apt/sources.list.d/caddy-stable.sources \
+  /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
+  /usr/share/keyrings/caddy-testing-archive-keyring.gpg
+
+export DEBIAN_FRONTEND=noninteractive
+echo "به‌روزرسانی فهرست بسته‌های سیستم..."
+if ! apt-get update -qq; then
+  echo "هشدار: apt-get update خطا داد. اگر بالا پر از ۴۰۴ است، یک خط خراب در /etc/apt/sources.list.d دارید."
+  echo "ادامه می‌دهیم؛ بسته‌های پایه باید از مخزن اصلی سیستم بیایند."
 fi
+apt-get install -y ca-certificates curl xz-utils
 
-ask() {
-  local var="$1" prompt="$2" def="${3:-}" secret="${4:-}"
-  local cur="${!var:-}"
-  if [[ "$YES" == 1 && -n "$cur" ]]; then
-    return
-  fi
-  if [[ "$YES" == 1 && -n "$def" ]]; then
-    printf -v "$var" '%s' "$def"
-    return
-  fi
-  local input
-  if [[ "$secret" == 1 ]]; then
-    read -r -s -p "$prompt${def:+ [$def]}: " input || true
-    echo
-  else
-    read -r -p "$prompt${def:+ [$def]}: " input || true
-  fi
-  if [[ -z "$input" ]]; then
-    input="$def"
-  fi
-  if [[ -z "$input" && -n "$cur" ]]; then
-    input="$cur"
-  fi
-  printf -v "$var" '%s' "$input"
-}
+export PATH="/usr/local/go/bin:/usr/local/bin:${PATH}"
 
-echo "نصب نگار"
-echo "اگر دامنه دارید و DNS آن به همین سرور اشاره می‌کند، نام دامنه را بنویسید."
-echo "برای آزمایش فقط با IP، همان IP را بنویسید. در آن حالت گواهی HTTPS گرفته نمی‌شود."
-
-ask DOMAIN "دامنه یا IP سایت" "${DOMAIN:-}"
-[[ -n "${DOMAIN}" ]] || die "دامنه خالی است."
-ask SITE_TITLE "نام سایت" "${SITE_TITLE:-نگار}"
-ask ADMIN_EMAIL "ایمیل مدیر" "${ADMIN_EMAIL:-}"
-[[ "$ADMIN_EMAIL" == *"@"* ]] || die "ایمیل معتبر نیست."
-
-if [[ "$YES" != 1 || -z "${ADMIN_PASSWORD:-}" ]]; then
-  while true; do
-    ask ADMIN_PASSWORD "رمز مدیر (حداقل ۱۰ نویسه)" "" 1
-    ask ADMIN_PASSWORD2 "تکرار رمز" "" 1
-    if [[ "$ADMIN_PASSWORD" != "$ADMIN_PASSWORD2" ]]; then
-      echo "رمزها یکی نیستند."
-      continue
-    fi
-    if [[ "${#ADMIN_PASSWORD}" -lt 10 ]]; then
-      echo "رمز کوتاه است."
-      continue
-    fi
-    break
-  done
-fi
-
-WWW="${WITH_WWW:-}"
-if [[ "$YES" != 1 ]]; then
-  read -r -p "نسخهٔ www هم به دامنه وصل شود؟ [y/N]: " WWWANS || true
-  if [[ "${WWWANS:-}" == "y" || "${WWWANS:-}" == "Y" ]]; then
-    WWW=1
-  else
-    WWW=0
-  fi
-fi
-
-MODE=https
-PUBLIC_URL="https://${DOMAIN}"
-if [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$DOMAIN" == *:* || "$DOMAIN" == "localhost" ]]; then
-  MODE=http
-  PUBLIC_URL="http://${DOMAIN}"
-  echo "دامنه یک IP یا localhost است. سایت روی HTTP بالا می‌آید."
-fi
-
-arch_go() {
-  case "$(uname -m)" in
-    x86_64) echo amd64 ;;
-    aarch64|arm64) echo arm64 ;;
-    *) die "معماری $(uname -m) پشتیبانی نمی‌شود." ;;
-  esac
-}
-arch_node() {
-  case "$(uname -m)" in
-    x86_64) echo x64 ;;
-    aarch64|arm64) echo arm64 ;;
-    *) die "معماری $(uname -m) پشتیبانی نمی‌شود." ;;
-  esac
-}
-
-log "نصب ابزارهای پایه"
-apt-get update
-apt-get install -y ca-certificates curl tar xz-utils unzip rsync gnupg ufw
-
-# گزینه‌های curl برای تمام دانلودها: تلاش دوباره خودکار و قطع نشدن روی کندی شبکه.
-CURL_OPTS=(--fail --silent --show-error --location --retry 3 --retry-delay 2 --retry-connrefused --connect-timeout 10 --max-time 180)
-
-# fetch_text <url> [url2] [url3] ...
-# متن پاسخ اولین نشانی که کار کند را چاپ می‌کند. اگر همه ناموفق بودند، خطا می‌دهد.
-fetch_text() {
-  local url out
-  for url in "$@"; do
-    if out="$(curl "${CURL_OPTS[@]}" "$url" 2>/dev/null)"; then
-      printf '%s' "$out"
-      return 0
-    fi
-    echo "  منبع در دسترس نبود: $url" >&2
-  done
-  return 1
-}
-
-# fetch_to <پروندهٔ-خروجی> <url1> [url2] [url3] ...
-# اولین نشانی که دانلودش موفق شود را در پروندهٔ خروجی می‌نویسد.
-fetch_to() {
-  local out="$1"; shift
-  local url
-  for url in "$@"; do
-    echo "  تلاش برای دانلود از: $url" >&2
-    if curl "${CURL_OPTS[@]}" "$url" -o "$out"; then
-      return 0
-    fi
-    echo "  ناموفق بود، مسیر پشتیبان بعدی را امتحان می‌کنم…" >&2
-  done
-  return 1
-}
-
-install_go() {
-  local need=1
-  if command -v go >/dev/null 2>&1; then
-    local v major minor
-    v="$(go env GOVERSION 2>/dev/null || true)"
-    major="$(printf '%s' "$v" | sed -E 's/^go([0-9]+).*/\1/')"
-    minor="$(printf '%s' "$v" | sed -E 's/^go[0-9]+\.([0-9]+).*/\1/')"
-    if [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]]; then
-      if [[ "$major" -gt 1 || ( "$major" -eq 1 && "$minor" -ge 27 ) ]]; then
-        need=0
-      fi
-    fi
-  fi
-  if [[ "$need" == 0 ]]; then
-    echo "Go از قبل مناسب است: $(go version)"
-    return
-  fi
-  log "دانلود Go"
-  local arch json file
-  arch="$(arch_go)"
-  json="$(fetch_text \
-    "https://go.dev/dl/?mode=json" \
-    "https://golang.google.cn/dl/?mode=json")" \
-    || die "فهرست نسخه‌های Go از هیچ‌کدام از منابع (go.dev، golang.google.cn) خوانده نشد. اتصال اینترنت سرور را بررسی کنید."
-  file="$(printf '%s' "$json" | grep -oE "go1\\.(2[7-9]|[3-9][0-9])\\.[0-9]+\\.linux-${arch}\\.tar\\.gz" | head -1)"
-  [[ -n "$file" ]] || die "نسخهٔ مناسب Go برای معماری ${arch} در فهرست پیدا نشد."
-  fetch_to /tmp/go.tgz \
-    "https://go.dev/dl/${file}" \
-    "https://dl.google.com/go/${file}" \
-    "https://golang.google.cn/dl/${file}" \
-    || die "دانلود Go از همهٔ مسیرهای پشتیبان (go.dev، dl.google.com، golang.google.cn) ناموفق بود."
+if ! command -v go >/dev/null 2>&1 || ! go version | grep -Eq 'go1\.(2[7-9]|[3-9][0-9])'; then
+  echo "نصب Go ${GO_VERSION}..."
+  fetch_checked /tmp/go.tgz sha256 "${GO_SHA[$GOARCH]}" \
+    "https://dl.google.com/go/go${GO_VERSION}.linux-${GOARCH}.tar.gz" \
+    "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" \
+    "https://mirrors.aliyun.com/golang/go${GO_VERSION}.linux-${GOARCH}.tar.gz" \
+    "https://mirrors.ustc.edu.cn/golang/go${GO_VERSION}.linux-${GOARCH}.tar.gz" \
+    "https://mirrors.cloud.tencent.com/go/go${GO_VERSION}.linux-${GOARCH}.tar.gz" \
+    || { echo "دانلود Go شکست خورد. هیچ آینه‌ای فایل سالم نداد."; exit 1; }
   rm -rf /usr/local/go
   tar -C /usr/local -xzf /tmp/go.tgz
+  rm -f /tmp/go.tgz
   ln -sfn /usr/local/go/bin/go /usr/local/bin/go
   ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+  hash -r
   go version
-}
+fi
 
-install_node() {
-  if command -v node >/dev/null 2>&1; then
-    local major
-    major="$(node -p "Number(process.versions.node.split('.')[0])")"
-    if [[ "$major" -ge 22 ]]; then
-      echo "Node از قبل مناسب است: $(node -v)"
-      return
-    fi
-  fi
-  log "دانلود Node.js 22"
-  local arch shasums name
-  arch="$(arch_node)"
-  local node_mirrors=(
-    "https://nodejs.org/dist/latest-v22.x"
-    "https://cdn.npmmirror.com/binary/node/latest-v22.x"
-    "https://mirrors.huaweicloud.com/nodejs/latest-v22.x"
-  )
-  local sha_urls=()
-  for m in "${node_mirrors[@]}"; do sha_urls+=("${m}/SHASUMS256.txt"); done
-  shasums="$(fetch_text "${sha_urls[@]}")" \
-    || die "فهرست نسخه‌های Node از هیچ‌کدام از منابع خوانده نشد. اتصال اینترنت سرور را بررسی کنید."
-  name="$(printf '%s' "$shasums" | awk "/linux-${arch}\\.tar\\.xz\$/{print \$2; exit}")"
-  [[ -n "$name" ]] || die "فایل مناسب Node برای معماری ${arch} در فهرست پیدا نشد."
-  local node_urls=()
-  for m in "${node_mirrors[@]}"; do node_urls+=("${m}/${name}"); done
-  fetch_to /tmp/node.tar.xz "${node_urls[@]}" \
-    || die "دانلود Node از همهٔ مسیرهای پشتیبان ناموفق بود."
-  tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz
+if ! command -v node >/dev/null 2>&1 || ! node -v | grep -Eq '^v(2[2-9]|[3-9][0-9])\.'; then
+  echo "نصب Node.js ${NODE_VERSION}..."
+  fetch_checked /tmp/node.tar.xz sha256 "${NODE_SHA[$NODEARCH]}" \
+    "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODEARCH}.tar.xz" \
+    "https://npmmirror.com/mirrors/node/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODEARCH}.tar.xz" \
+    "https://mirrors.aliyun.com/nodejs-release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODEARCH}.tar.xz" \
+    "https://mirrors.cloud.tencent.com/nodejs-release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODEARCH}.tar.xz" \
+    || { echo "دانلود Node شکست خورد. هیچ آینه‌ای فایل سالم نداد."; exit 1; }
+  rm -rf /usr/local/lib/nodejs
+  mkdir -p /usr/local/lib/nodejs
+  tar -C /usr/local/lib/nodejs --strip-components=1 -xJf /tmp/node.tar.xz
+  rm -f /tmp/node.tar.xz
+  ln -sfn /usr/local/lib/nodejs/bin/node /usr/local/bin/node
+  ln -sfn /usr/local/lib/nodejs/bin/npm /usr/local/bin/npm
+  ln -sfn /usr/local/lib/nodejs/bin/npx /usr/local/bin/npx
+  hash -r
   node -v
   npm -v
-}
-
-install_caddy() {
-  if command -v caddy >/dev/null 2>&1; then
-    echo "Caddy از قبل نصب است: $(command -v caddy)"
-    return
-  fi
-  log "دانلود Caddy"
-  local arch
-  arch="$(arch_go)"
-  if fetch_to /usr/local/bin/caddy \
-    "https://caddyserver.com/api/download?os=linux&arch=${arch}"; then
-    chmod 755 /usr/local/bin/caddy
-  else
-    echo "  منبع اصلی Caddy در دسترس نبود؛ تلاش از طریق GitHub Releases…" >&2
-    local gh_json asset_url
-    gh_json="$(fetch_text \
-      "https://api.github.com/repos/caddyserver/caddy/releases/latest" \
-      "https://ghproxy.com/https://api.github.com/repos/caddyserver/caddy/releases/latest")" \
-      || die "دانلود Caddy ناموفق بود: نه آدرس اصلی و نه GitHub در دسترس بودند."
-    asset_url="$(printf '%s' "$gh_json" \
-      | grep -oE "\"browser_download_url\" *: *\"[^\"]*linux_${arch}\\.tar\\.gz\"" \
-      | head -1 | sed -E 's/.*"(https:[^"]+)".*/\1/')"
-    [[ -n "$asset_url" ]] || die "فایل مناسب Caddy برای معماری ${arch} در GitHub پیدا نشد."
-    fetch_to /tmp/caddy.tar.gz \
-      "$asset_url" \
-      "https://ghproxy.com/${asset_url}" \
-      || die "دانلود Caddy از GitHub و مسیر پشتیبان آن ناموفق بود."
-    tar -xzf /tmp/caddy.tar.gz -C /tmp caddy
-    install -m 755 /tmp/caddy /usr/local/bin/caddy
-    rm -f /tmp/caddy.tar.gz /tmp/caddy
-  fi
-  if [[ ! -f /lib/systemd/system/caddy.service && ! -f /etc/systemd/system/caddy.service ]]; then
-    cat > /etc/systemd/system/caddy.service <<'UNIT'
-[Unit]
-Description=Caddy
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile
-TimeoutStopSec=5s
-LimitNOFILE=1048576
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-  fi
-}
-
-install_go
-install_node
-install_caddy
-
-log "کپی پرونده‌ها"
-if ! id site >/dev/null 2>&1; then
-  useradd --system --home /opt/site --shell /usr/sbin/nologin site || useradd --system --home /opt/site --shell /bin/false site
-fi
-mkdir -p /opt/site /var/lib/site/pb_data /etc/site
-if [[ "$SRC" != "/opt/site" ]]; then
-  rsync -a --delete \
-    --exclude pb_data \
-    --exclude node_modules \
-    --exclude .next \
-    --exclude bin \
-    --exclude plugins \
-    --exclude frontend/.env.production \
-    "${SRC}/" /opt/site/
-  mkdir -p /opt/site/plugins
-  for d in "${SRC}/plugins"/*; do
-    [[ -d "$d" ]] || continue
-    name="$(basename "$d")"
-    rm -rf "/opt/site/plugins/${name}"
-    cp -a "$d" "/opt/site/plugins/${name}"
-  done
 fi
 
-q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-cat > /etc/site/site.env <<EOF
-PB_DATA=/var/lib/site/pb_data
-PLUGINS_DIR=/opt/site/plugins
-ADMIN_EMAIL=$(q "$ADMIN_EMAIL")
-ADMIN_PASSWORD=$(q "$ADMIN_PASSWORD")
-SITE_TITLE=$(q "$SITE_TITLE")
-DOMAIN=$(q "$DOMAIN")
-PUBLIC_URL=$(q "$PUBLIC_URL")
-INTERNAL_API_URL='http://127.0.0.1:8090'
+if ! command -v caddy >/dev/null 2>&1; then
+  echo "نصب Caddy ${CADDY_VERSION}..."
+  fetch_checked /tmp/caddy.deb sha512 "${CADDY_SHA512[$CADDYARCH]}" \
+    "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${CADDYARCH}.deb" \
+    || { echo "دانلود Caddy شکست خورد."; exit 1; }
+  apt-get install -y /tmp/caddy.deb
+  rm -f /tmp/caddy.deb
+fi
+
+mkdir -p "$DEST"
+if [ "$SRC" != "$DEST" ]; then
+  tar -C "$SRC" \
+    --exclude node_modules --exclude .next --exclude pb_data --exclude backend/bin \
+    -cf - . | tar -C "$DEST" -xf -
+fi
+
+if [ ! -f "$DEST/backend/vendor/modules.txt" ]; then
+  echo "backend/vendor در بسته نیست. زیپ را کامل باز کنید؛ go mod tidy لازم نیست و همان جا ۴۰۴ می‌سازد."
+  exit 1
+fi
+
+if ! id negar >/dev/null 2>&1; then
+  useradd --system --home "$DEST" --shell /usr/sbin/nologin negar
+fi
+
+install -d -o negar -g negar "$DEST/pb_data" "$DEST/backend/bin" "$DEST/.npm-cache"
+
+umask 077
+cat > "$DEST/backend/env" <<EOF
+NEGAR_ADMIN_EMAIL="$(env_escape "$ADMIN_EMAIL")"
+NEGAR_ADMIN_PASSWORD="$(env_escape "$ADMIN_PASSWORD")"
+NEGAR_ADMIN_NAME="$(env_escape "مدیر")"
+NEGAR_SITE_NAME="$(env_escape "$SITE_NAME")"
+NEGAR_DOMAIN="$(env_escape "$DOMAIN")"
+NEGAR_PUBLIC_URL="$(env_escape "https://${DOMAIN}")"
+NEGAR_PLUGINS="$(env_escape "${DEST}/plugins")"
 EOF
-chmod 640 /etc/site/site.env
-chgrp site /etc/site/site.env
+chmod 600 "$DEST/backend/env"
 
-install -m 755 /opt/site/scripts/site-cli.sh /usr/local/bin/site
+umask 022
+cat > "$DEST/frontend/.env.production" <<EOF
+PB_INTERNAL_URL=http://127.0.0.1:8090
+NEXT_PUBLIC_SITE_URL=https://${DOMAIN}
+EOF
+# نام قدیمی؛ سرویس دیگر به آن وابسته نیست، فقط برای سازگاری با ارتقا می‌ماند.
+cp "$DEST/frontend/.env.production" "$DEST/frontend/env"
 
-log "ساخت برنامه (ممکن است چند دقیقه طول بکشد)"
-bash /opt/site/scripts/build-app.sh
+echo "ساخت بک‌اند از vendor (بدون پروکسی ماژول)..."
+export PATH="/usr/local/go/bin:/usr/local/bin:${PATH}"
+cd "$DEST/backend"
+CGO_ENABLED=0 go build -mod=vendor -trimpath -o "$DEST/backend/bin/negar" .
 
-chown -R site:site /opt/site /var/lib/site
+echo "ساخت فرانت..."
+cd "$DEST/frontend"
+if [ -n "${NPM_REGISTRY:-}" ]; then
+  npm config set registry "$NPM_REGISTRY"
+fi
+npm config set fetch-retries 5
+npm config set fetch-retry-mintimeout 20000
+npm config set fetch-retry-maxtimeout 120000
+npm config set audit false
+npm config set fund false
+npm config set update-notifier false
+if [ -f package-lock.json ]; then
+  npm ci --include=dev --no-audit --no-fund
+else
+  npm install --include=dev --no-audit --no-fund
+fi
+npm run build
+
+chown -R negar:negar "$DEST"
 
 NODE_BIN="$(command -v node)"
-cat > /etc/systemd/system/site-api.service <<'EOF'
+cat > /etc/systemd/system/negar-api.service <<EOF
 [Unit]
-Description=نگار API و PocketBase
+Description=Negar API (PocketBase)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=site
-Group=site
-EnvironmentFile=/etc/site/site.env
-WorkingDirectory=/opt/site
-ExecStart=/opt/site/bin/site-api serve --http=127.0.0.1:8090 --dir=/var/lib/site/pb_data
+User=negar
+Group=negar
+WorkingDirectory=${DEST}/backend
+EnvironmentFile=${DEST}/backend/env
+ExecStart=${DEST}/backend/bin/negar serve --http=127.0.0.1:8090 --dir=${DEST}/pb_data
 Restart=on-failure
-RestartSec=2
+RestartSec=3
 NoNewPrivileges=true
-LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-cat > /etc/systemd/system/site-web.service <<EOF
+cat > /etc/systemd/system/negar-web.service <<EOF
 [Unit]
-Description=نگار وب
-After=site-api.service
-Wants=site-api.service
+Description=Negar web
+After=negar-api.service
+Wants=negar-api.service
 
 [Service]
 Type=simple
-User=site
-Group=site
-EnvironmentFile=/etc/site/site.env
-WorkingDirectory=/opt/site/frontend/.next/standalone
-Environment=PORT=3000
-Environment=HOSTNAME=127.0.0.1
-ExecStart=${NODE_BIN} server.js
+User=negar
+Group=negar
+WorkingDirectory=${DEST}/frontend
+Environment=NODE_ENV=production
+Environment=HOME=${DEST}
+Environment=npm_config_cache=${DEST}/.npm-cache
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=${NODE_BIN} node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3000
 Restart=on-failure
-RestartSec=2
+RestartSec=3
 NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-mkdir -p /etc/caddy
-if [[ -f /etc/caddy/Caddyfile ]] && ! grep -q "NEGAR-CMS" /etc/caddy/Caddyfile; then
-  cp /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.bak.$(date +%s)"
+HOSTS="$DOMAIN"
+if [ "${WITH_WWW}" = "1" ]; then
+  HOSTS="$DOMAIN, www.$DOMAIN"
 fi
-
-if [[ "$MODE" == https ]]; then
-  cat > /etc/caddy/Caddyfile <<EOF
-# NEGAR-CMS
-${DOMAIN} {
-	encode zstd gzip
-	handle /api/* {
-		reverse_proxy 127.0.0.1:8090
-	}
-	handle {
-		reverse_proxy 127.0.0.1:3000
-	}
-	header {
-		-Server
-		X-Content-Type-Options nosniff
-		Referrer-Policy strict-origin-when-cross-origin
-		X-Frame-Options SAMEORIGIN
-	}
-}
-EOF
-  if [[ "$WWW" == 1 ]]; then
-    cat >> /etc/caddy/Caddyfile <<EOF
-www.${DOMAIN} {
-	redir https://${DOMAIN}{uri} permanent
-}
-EOF
-  fi
-else
-  cat > /etc/caddy/Caddyfile <<EOF
-# NEGAR-CMS
-:80 {
-	encode zstd gzip
-	handle /api/* {
-		reverse_proxy 127.0.0.1:8090
-	}
-	handle {
-		reverse_proxy 127.0.0.1:3000
-	}
-}
-EOF
+if [ -f /etc/caddy/Caddyfile ] && [ ! -f /etc/caddy/Caddyfile.negar.bak ]; then
+  cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.negar.bak
 fi
+cat > /etc/caddy/Caddyfile <<EOF
+{
+  email ${ADMIN_EMAIL}
+}
 
-log "راه‌اندازی سرویس‌ها"
+${HOSTS} {
+  encode zstd gzip
+  handle /pb/* {
+    uri strip_prefix /pb
+    reverse_proxy 127.0.0.1:8090
+  }
+  handle {
+    reverse_proxy 127.0.0.1:3000
+  }
+}
+EOF
+
 systemctl daemon-reload
-systemctl enable site-api site-web caddy
-systemctl restart site-api
+systemctl enable --now negar-api.service
+systemctl restart negar-api.service
+systemctl enable --now negar-web.service
+systemctl restart negar-web.service
+systemctl enable caddy
+systemctl reload caddy || systemctl restart caddy
+
 ok=0
-for _ in $(seq 1 40); do
-  if curl -sf "http://127.0.0.1:8090/api/v1/health" >/dev/null; then
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  if curl -sf http://127.0.0.1:8090/api/negar/health >/dev/null; then
     ok=1
     break
   fi
-  sleep 1
+  sleep 0.5
 done
-[[ "$ok" == 1 ]] || die "سرویس API بالا نیامد. لاگ: journalctl -u site-api -n 80"
-systemctl restart site-web
-systemctl reload caddy || systemctl restart caddy
 
-if command -v ufw >/dev/null 2>&1; then
-  ufw allow 22/tcp || true
+if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
   ufw allow 80/tcp || true
   ufw allow 443/tcp || true
-  ufw --force enable || true
 fi
 
 echo
-echo "نگار نصب شد."
-echo "سایت: ${PUBLIC_URL}"
-echo "پنل:  ${PUBLIC_URL}/master"
-echo "ایمیل مدیر: ${ADMIN_EMAIL}"
-echo "رمز همان است که همین حالا وارد کردید."
-if [[ "$MODE" == https ]]; then
-  echo "اگر گواهی ساخته نشد، رکورد DNS دامنه را به IP این سرور اشاره دهید و بعد: sudo systemctl restart caddy"
+if [ "$ok" = "1" ]; then
+  echo "نصب تمام شد."
+else
+  echo "سرویس API هنوز جواب نداد. لاگ: journalctl -u negar-api -n 80 --no-pager"
 fi
-echo "دستورهای بعدی: sudo site status | sudo site logs | sudo site rebuild"
+echo "سایت:    https://${DOMAIN}"
+echo "مدیریت:  https://${DOMAIN}/master"
+echo "ایمیل:   ${ADMIN_EMAIL}"
+echo "پایگاه:  https://${DOMAIN}/pb/_/"
+echo "به‌روزرسانی بعدی: sudo bash ${DEST}/install.sh --upgrade"
