@@ -126,6 +126,38 @@ log "نصب ابزارهای پایه"
 apt-get update
 apt-get install -y ca-certificates curl tar xz-utils unzip rsync gnupg ufw
 
+# گزینه‌های curl برای تمام دانلودها: تلاش دوباره خودکار و قطع نشدن روی کندی شبکه.
+CURL_OPTS=(--fail --silent --show-error --location --retry 3 --retry-delay 2 --retry-connrefused --connect-timeout 10 --max-time 180)
+
+# fetch_text <url> [url2] [url3] ...
+# متن پاسخ اولین نشانی که کار کند را چاپ می‌کند. اگر همه ناموفق بودند، خطا می‌دهد.
+fetch_text() {
+  local url out
+  for url in "$@"; do
+    if out="$(curl "${CURL_OPTS[@]}" "$url" 2>/dev/null)"; then
+      printf '%s' "$out"
+      return 0
+    fi
+    echo "  منبع در دسترس نبود: $url" >&2
+  done
+  return 1
+}
+
+# fetch_to <پروندهٔ-خروجی> <url1> [url2] [url3] ...
+# اولین نشانی که دانلودش موفق شود را در پروندهٔ خروجی می‌نویسد.
+fetch_to() {
+  local out="$1"; shift
+  local url
+  for url in "$@"; do
+    echo "  تلاش برای دانلود از: $url" >&2
+    if curl "${CURL_OPTS[@]}" "$url" -o "$out"; then
+      return 0
+    fi
+    echo "  ناموفق بود، مسیر پشتیبان بعدی را امتحان می‌کنم…" >&2
+  done
+  return 1
+}
+
 install_go() {
   local need=1
   if command -v go >/dev/null 2>&1; then
@@ -144,10 +176,19 @@ install_go() {
     return
   fi
   log "دانلود Go"
-  local file
-  file="$(curl -fsSL "https://go.dev/dl/?mode=json" | grep -oE "go1\\.(2[7-9]|[3-9][0-9])\\.[0-9]+\\.linux-$(arch_go)\\.tar\\.gz" | head -1)"
-  [[ -n "$file" ]] || die "فهرست نسخه‌های Go خوانده نشد."
-  curl -fsSL "https://go.dev/dl/${file}" -o /tmp/go.tgz
+  local arch json file
+  arch="$(arch_go)"
+  json="$(fetch_text \
+    "https://go.dev/dl/?mode=json" \
+    "https://golang.google.cn/dl/?mode=json")" \
+    || die "فهرست نسخه‌های Go از هیچ‌کدام از منابع (go.dev، golang.google.cn) خوانده نشد. اتصال اینترنت سرور را بررسی کنید."
+  file="$(printf '%s' "$json" | grep -oE "go1\\.(2[7-9]|[3-9][0-9])\\.[0-9]+\\.linux-${arch}\\.tar\\.gz" | head -1)"
+  [[ -n "$file" ]] || die "نسخهٔ مناسب Go برای معماری ${arch} در فهرست پیدا نشد."
+  fetch_to /tmp/go.tgz \
+    "https://go.dev/dl/${file}" \
+    "https://dl.google.com/go/${file}" \
+    "https://golang.google.cn/dl/${file}" \
+    || die "دانلود Go از همهٔ مسیرهای پشتیبان (go.dev، dl.google.com، golang.google.cn) ناموفق بود."
   rm -rf /usr/local/go
   tar -C /usr/local -xzf /tmp/go.tgz
   ln -sfn /usr/local/go/bin/go /usr/local/bin/go
@@ -165,10 +206,23 @@ install_node() {
     fi
   fi
   log "دانلود Node.js 22"
-  local name
-  name="$(curl -fsSL "https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt" | awk "/linux-$(arch_node)\\.tar\\.xz$/{print \$2; exit}")"
-  [[ -n "$name" ]] || die "فهرست Node خوانده نشد."
-  curl -fsSL "https://nodejs.org/dist/latest-v22.x/${name}" -o /tmp/node.tar.xz
+  local arch shasums name
+  arch="$(arch_node)"
+  local node_mirrors=(
+    "https://nodejs.org/dist/latest-v22.x"
+    "https://cdn.npmmirror.com/binary/node/latest-v22.x"
+    "https://mirrors.huaweicloud.com/nodejs/latest-v22.x"
+  )
+  local sha_urls=()
+  for m in "${node_mirrors[@]}"; do sha_urls+=("${m}/SHASUMS256.txt"); done
+  shasums="$(fetch_text "${sha_urls[@]}")" \
+    || die "فهرست نسخه‌های Node از هیچ‌کدام از منابع خوانده نشد. اتصال اینترنت سرور را بررسی کنید."
+  name="$(printf '%s' "$shasums" | awk "/linux-${arch}\\.tar\\.xz\$/{print \$2; exit}")"
+  [[ -n "$name" ]] || die "فایل مناسب Node برای معماری ${arch} در فهرست پیدا نشد."
+  local node_urls=()
+  for m in "${node_mirrors[@]}"; do node_urls+=("${m}/${name}"); done
+  fetch_to /tmp/node.tar.xz "${node_urls[@]}" \
+    || die "دانلود Node از همهٔ مسیرهای پشتیبان ناموفق بود."
   tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz
   node -v
   npm -v
@@ -182,8 +236,28 @@ install_caddy() {
   log "دانلود Caddy"
   local arch
   arch="$(arch_go)"
-  curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=${arch}" -o /usr/local/bin/caddy
-  chmod 755 /usr/local/bin/caddy
+  if fetch_to /usr/local/bin/caddy \
+    "https://caddyserver.com/api/download?os=linux&arch=${arch}"; then
+    chmod 755 /usr/local/bin/caddy
+  else
+    echo "  منبع اصلی Caddy در دسترس نبود؛ تلاش از طریق GitHub Releases…" >&2
+    local gh_json asset_url
+    gh_json="$(fetch_text \
+      "https://api.github.com/repos/caddyserver/caddy/releases/latest" \
+      "https://ghproxy.com/https://api.github.com/repos/caddyserver/caddy/releases/latest")" \
+      || die "دانلود Caddy ناموفق بود: نه آدرس اصلی و نه GitHub در دسترس بودند."
+    asset_url="$(printf '%s' "$gh_json" \
+      | grep -oE "\"browser_download_url\" *: *\"[^\"]*linux_${arch}\\.tar\\.gz\"" \
+      | head -1 | sed -E 's/.*"(https:[^"]+)".*/\1/')"
+    [[ -n "$asset_url" ]] || die "فایل مناسب Caddy برای معماری ${arch} در GitHub پیدا نشد."
+    fetch_to /tmp/caddy.tar.gz \
+      "$asset_url" \
+      "https://ghproxy.com/${asset_url}" \
+      || die "دانلود Caddy از GitHub و مسیر پشتیبان آن ناموفق بود."
+    tar -xzf /tmp/caddy.tar.gz -C /tmp caddy
+    install -m 755 /tmp/caddy /usr/local/bin/caddy
+    rm -f /tmp/caddy.tar.gz /tmp/caddy
+  fi
   if [[ ! -f /lib/systemd/system/caddy.service && ! -f /etc/systemd/system/caddy.service ]]; then
     cat > /etc/systemd/system/caddy.service <<'UNIT'
 [Unit]
